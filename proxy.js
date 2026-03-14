@@ -2,7 +2,6 @@ const http = require('http')
 const httpProxy = require('http-proxy')
 const { exec } = require('child_process')
 
-const proxy = httpProxy.createProxyServer({ selfHandleResponse: true })
 const EFR_PORT = 5618
 const PROXY_PORT = 8080
 const EFR_PATH = '/efr'
@@ -11,7 +10,7 @@ const BUTTON_SCRIPT = `<script>
 (function() {
   if (document.getElementById('efr-clear-btn')) return;
   var style = document.createElement('style');
-  style.textContent = '#efr-clear-btn{position:fixed;bottom:24px;right:24px;z-index:99999;background:#e53e3e;color:white;border:none;padding:14px 22px;border-radius:50px;font-size:15px;font-family:sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.3);}#efr-toast{position:fixed;bottom:80px;right:24px;z-index:99999;background:#1a1a1a;color:#4ade80;padding:10px 18px;border-radius:8px;font-size:13px;font-family:sans-serif;display:none;}';
+  style.textContent = '#efr-clear-btn{position:fixed;top:24px;left:24px;z-index:99999;background:#e53e3e;color:white;border:none;padding:14px 22px;border-radius:50px;font-size:15px;font-family:sans-serif;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.3);}#efr-toast{position:fixed;top:70px;left:24px;z-index:99999;background:#1a1a1a;color:#4ade80;padding:10px 18px;border-radius:8px;font-size:13px;font-family:sans-serif;display:none;}';
   document.head.appendChild(style);
   var btn = document.createElement('button');
   btn.id = 'efr-clear-btn';
@@ -42,12 +41,7 @@ const BUTTON_SCRIPT = `<script>
 })();
 </script>`
 
-function injectButton(body) {
-  if (body.includes('id="efr-clear-btn"')) return body
-  const idx = body.lastIndexOf('</html>')
-  if (idx !== -1) return body.slice(0, idx) + BUTTON_SCRIPT + body.slice(idx)
-  return body + BUTTON_SCRIPT
-}
+const proxy = httpProxy.createProxyServer({})
 
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/__efr_clear') {
@@ -63,32 +57,36 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  proxy.web(req, res, { target: `http://localhost:${EFR_PORT}` }, (err) => {
+  const options = { target: `http://localhost:${EFR_PORT}`, selfHandleResponse: true }
+
+  proxy.once('proxyRes', (proxyRes, req, res) => {
+    const contentType = proxyRes.headers['content-type'] || ''
+    const encoding = proxyRes.headers['content-encoding'] || ''
+
+    if (contentType.includes('text/html') && !encoding) {
+      const chunks = []
+      proxyRes.on('data', chunk => chunks.push(chunk))
+      proxyRes.on('end', () => {
+        let body = Buffer.concat(chunks).toString('utf8')
+        if (!body.includes('efr-clear-btn')) {
+          body = body + BUTTON_SCRIPT
+        }
+        const headers = { ...proxyRes.headers }
+        delete headers['content-encoding']
+        headers['content-length'] = Buffer.byteLength(body).toString()
+        res.writeHead(proxyRes.statusCode, headers)
+        res.end(body)
+      })
+    } else {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers)
+      proxyRes.pipe(res)
+    }
+  })
+
+  proxy.web(req, res, options, (err) => {
     res.writeHead(502)
     res.end('EFR not available')
   })
-})
-
-proxy.on('proxyRes', (proxyRes, req, res) => {
-  const contentType = proxyRes.headers['content-type'] || ''
-  const encoding = proxyRes.headers['content-encoding'] || ''
-
-  if (contentType.includes('text/html') && !encoding) {
-    const chunks = []
-    proxyRes.on('data', chunk => chunks.push(chunk))
-    proxyRes.on('end', () => {
-      let body = Buffer.concat(chunks).toString('utf8')
-      body = injectButton(body)
-      const headers = { ...proxyRes.headers }
-      delete headers['content-encoding']
-      headers['content-length'] = Buffer.byteLength(body).toString()
-      res.writeHead(proxyRes.statusCode, headers)
-      res.end(body)
-    })
-  } else {
-    res.writeHead(proxyRes.statusCode, proxyRes.headers)
-    proxyRes.pipe(res)
-  }
 })
 
 server.listen(PROXY_PORT, () => {
