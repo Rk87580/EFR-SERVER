@@ -1,6 +1,7 @@
 const http = require('http')
 const httpProxy = require('http-proxy')
 const { exec } = require('child_process')
+const zlib = require('zlib')
 
 const proxy = httpProxy.createProxyServer({ selfHandleResponse: true })
 const EFR_PORT = 5618
@@ -74,6 +75,33 @@ async function efrClear() {
 </script>
 `
 
+function injectButton(body) {
+  // Only inject once — find last </body> tag
+  const idx = body.lastIndexOf('</body>')
+  if (idx !== -1) {
+    return body.slice(0, idx) + FLOATING_BUTTON + body.slice(idx)
+  }
+  return body + FLOATING_BUTTON
+}
+
+function decompress(proxyRes, callback) {
+  const encoding = proxyRes.headers['content-encoding']
+  const chunks = []
+  proxyRes.on('data', chunk => chunks.push(chunk))
+  proxyRes.on('end', () => {
+    const buffer = Buffer.concat(chunks)
+    if (encoding === 'gzip') {
+      zlib.gunzip(buffer, (err, decoded) => callback(err, decoded))
+    } else if (encoding === 'deflate') {
+      zlib.inflate(buffer, (err, decoded) => callback(err, decoded))
+    } else if (encoding === 'br') {
+      zlib.brotliDecompress(buffer, (err, decoded) => callback(err, decoded))
+    } else {
+      callback(null, buffer)
+    }
+  })
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/__efr_clear') {
     const cmd = `rm -rf ${EFR_PATH}/gbl/* ${EFR_PATH}/log/* ${EFR_PATH}/rn/* ${EFR_PATH}/temp/*`
@@ -98,22 +126,20 @@ proxy.on('proxyRes', (proxyRes, req, res) => {
   const contentType = proxyRes.headers['content-type'] || ''
 
   if (contentType.includes('text/html')) {
-    let body = ''
-    proxyRes.on('data', chunk => body += chunk.toString())
-    proxyRes.on('end', () => {
-      if (body.includes('</body>')) {
-        body = body.replace('</body>', FLOATING_BUTTON + '</body>')
-      } else {
-        body += FLOATING_BUTTON
+    decompress(proxyRes, (err, buffer) => {
+      if (err) {
+        res.writeHead(500)
+        return res.end('Decompression error')
       }
+      const body = injectButton(buffer.toString('utf8'))
       const headers = { ...proxyRes.headers }
       delete headers['content-encoding']
-      delete headers['content-length']
       headers['content-length'] = Buffer.byteLength(body).toString()
       res.writeHead(proxyRes.statusCode, headers)
       res.end(body)
     })
   } else {
+    // Pass everything else through untouched
     res.writeHead(proxyRes.statusCode, proxyRes.headers)
     proxyRes.pipe(res)
   }
