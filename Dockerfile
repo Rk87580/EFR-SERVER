@@ -8,7 +8,6 @@ RUN chmod +x run.sh app/node
 
 RUN npm install
 
-EXPOSE 5618
-EXPOSE 3000
+EXPOSE 8080
 
-CMD ["bash", "-c", "node server.js & bash run.sh"]
+CMD ["bash", "-c", "node proxy.js & bash run.sh"]
