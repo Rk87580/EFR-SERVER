@@ -1,6 +1,4 @@
-FROM debian:bullseye-slim
-
-RUN apt-get update && apt-get install -y bash coreutils && rm -rf /var/lib/apt/lists/*
+FROM node:10-buster-slim
 
 WORKDIR /efr
 
@@ -8,6 +6,9 @@ COPY . /efr/
 
 RUN chmod +x run.sh app/node
 
-EXPOSE 5618
+RUN npm install
 
-CMD ["bash", "run.sh"]
+EXPOSE 5618
+EXPOSE 3000
+
+CMD ["bash", "-c", "node server.js & bash run.sh"]
