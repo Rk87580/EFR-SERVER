@@ -2,7 +2,7 @@ const http = require('http')
 const httpProxy = require('http-proxy')
 const { exec } = require('child_process')
 
-const proxy = httpProxy.createProxyServer({})
+const proxy = httpProxy.createProxyServer({ selfHandleResponse: true })
 const EFR_PORT = 5618
 const PROXY_PORT = 8080
 const EFR_PATH = '/efr'
@@ -75,7 +75,6 @@ async function efrClear() {
 `
 
 const server = http.createServer((req, res) => {
-  // Handle clear API
   if (req.method === 'POST' && req.url === '/__efr_clear') {
     const cmd = `rm -rf ${EFR_PATH}/gbl/* ${EFR_PATH}/log/* ${EFR_PATH}/rn/* ${EFR_PATH}/temp/*`
     exec(cmd, (error, stdout, stderr) => {
@@ -89,39 +88,35 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  // Proxy everything else to EFR
-  const chunks = []
-  const _writeHead = res.writeHead.bind(res)
-  const _write = res.write.bind(res)
-  const _end = res.end.bind(res)
-
-  proxy.web(req, res, { 
-    target: `http://localhost:${EFR_PORT}`,
-    selfHandleResponse: true
-  }, (err) => {
+  proxy.web(req, res, { target: `http://localhost:${EFR_PORT}` }, (err) => {
     res.writeHead(502)
     res.end('EFR not available')
   })
+})
 
-  proxy.on('proxyRes', (proxyRes, req, res) => {
-    const contentType = proxyRes.headers['content-type'] || ''
-    
-    if (contentType.includes('text/html')) {
-      let body = ''
-      proxyRes.on('data', chunk => body += chunk)
-      proxyRes.on('end', () => {
+proxy.on('proxyRes', (proxyRes, req, res) => {
+  const contentType = proxyRes.headers['content-type'] || ''
+
+  if (contentType.includes('text/html')) {
+    let body = ''
+    proxyRes.on('data', chunk => body += chunk.toString())
+    proxyRes.on('end', () => {
+      if (body.includes('</body>')) {
         body = body.replace('</body>', FLOATING_BUTTON + '</body>')
-        const headers = { ...proxyRes.headers }
-        delete headers['content-encoding']
-        headers['content-length'] = Buffer.byteLength(body)
-        res.writeHead(proxyRes.statusCode, headers)
-        res.end(body)
-      })
-    } else {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers)
-      proxyRes.pipe(res)
-    }
-  })
+      } else {
+        body += FLOATING_BUTTON
+      }
+      const headers = { ...proxyRes.headers }
+      delete headers['content-encoding']
+      delete headers['content-length']
+      headers['content-length'] = Buffer.byteLength(body).toString()
+      res.writeHead(proxyRes.statusCode, headers)
+      res.end(body)
+    })
+  } else {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers)
+    proxyRes.pipe(res)
+  }
 })
 
 server.listen(PROXY_PORT, () => {
